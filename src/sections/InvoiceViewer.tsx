@@ -83,7 +83,7 @@ export default function InvoiceViewer({ invoice }: InvoiceViewerProps) {
       approvedBy: invoice.clientEmail
     };
 
-    updateInvoice(updatedInvoice);
+    await updateInvoice(updatedInvoice);
     setIsApproved(true);
 
     // 2. Generate and download PDF (simulating email attachment)

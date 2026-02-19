@@ -24,17 +24,21 @@ function InvoiceRoute() {
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    if (id) {
-      const found = getInvoiceById(id);
-      if (found) {
-        setInvoice(found);
-        // If already approved, skip verification
-        if (found.status === 'approved') {
-          setIsVerified(true);
+    const fetchInvoice = async () => {
+      if (id) {
+        setIsLoading(true);
+        const found = await getInvoiceById(id);
+        if (found) {
+          setInvoice(found);
+          // If already approved, skip verification
+          if (found.status === 'approved') {
+            setIsVerified(true);
+          }
         }
+        setIsLoading(false);
       }
-      setIsLoading(false);
-    }
+    };
+    fetchInvoice();
   }, [id]);
 
   if (isLoading) {

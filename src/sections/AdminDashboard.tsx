@@ -47,7 +47,11 @@ export default function AdminDashboard() {
   });
 
   useEffect(() => {
-    setInvoices(getAllInvoices());
+    const fetchInvoices = async () => {
+      const data = await getAllInvoices();
+      setInvoices(data);
+    };
+    fetchInvoices();
   }, []);
 
   const calculateTotals = () => {
@@ -123,7 +127,7 @@ export default function AdminDashboard() {
     setEditingId(null);
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const { subtotal, vatAmount, total } = calculateTotals();
 
@@ -148,7 +152,7 @@ export default function AdminDashboard() {
           notes: formData.notes
         };
 
-        updateInvoice(updatedInvoice);
+        await updateInvoice(updatedInvoice);
         setInvoices(invoices.map(inv => inv.id === editingId ? updatedInvoice : inv));
         toast.success('Factuur succesvol bijgewerkt!');
       }
@@ -174,7 +178,7 @@ export default function AdminDashboard() {
         status: 'pending'
       };
 
-      saveInvoice(newInvoice);
+      await saveInvoice(newInvoice);
       setInvoices([...invoices, newInvoice]);
       toast.success(`${formData.type === 'proforma' ? 'Proforma' : 'Factuur'} succesvol aangemaakt!`);
     }
@@ -199,9 +203,9 @@ export default function AdminDashboard() {
     }
   };
 
-  const handleDelete = (id: string) => {
+  const handleDelete = async (id: string) => {
     if (confirm('Weet u zeker dat u wilt verwijderen?')) {
-      deleteInvoice(id);
+      await deleteInvoice(id);
       setInvoices(invoices.filter(inv => inv.id !== id));
       toast.success('Verwijderd!');
     }

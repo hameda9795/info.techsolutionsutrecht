@@ -48,7 +48,7 @@ export default function EmailVerification({ invoice, onVerified }: EmailVerifica
       verificationCode: newCode,
       codeExpiry: new Date(Date.now() + 10 * 60 * 1000).toISOString()
     };
-    updateInvoice(updatedInvoice);
+    await updateInvoice(updatedInvoice);
 
     try {
       // Send real email via API
@@ -110,7 +110,7 @@ export default function EmailVerification({ invoice, onVerified }: EmailVerifica
     setIsLoading(false);
   };
 
-  const handleResendCode = () => {
+  const handleResendCode = async () => {
     if (countdown > 0) return;
 
     const newCode = generateVerificationCode();
@@ -121,7 +121,7 @@ export default function EmailVerification({ invoice, onVerified }: EmailVerifica
       verificationCode: newCode,
       codeExpiry: new Date(Date.now() + 10 * 60 * 1000).toISOString()
     };
-    updateInvoice(updatedInvoice);
+    await updateInvoice(updatedInvoice);
 
     toast.success(`Nieuwe code verzonden! (Demo: ${newCode})`);
     setCountdown(60);
