@@ -31,7 +31,7 @@ export default function InvoiceViewer({ invoice }: InvoiceViewerProps) {
       // Create PDF
       const pdf = new jsPDF('p', 'mm', 'a4');
       const pdfWidth = pdf.internal.pageSize.getWidth();
-      const pdfHeight = pdf.internal.pageSize.getHeight();
+
 
       // Page 1
       const canvas1 = await html2canvas(page1Ref.current, {
