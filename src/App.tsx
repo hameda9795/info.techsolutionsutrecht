@@ -2,7 +2,6 @@ import { useState, useEffect } from 'react';
 import { HashRouter, Routes, Route, useParams, Navigate, Outlet } from 'react-router-dom';
 import { Toaster } from '@/components/ui/sonner';
 import AdminDashboard from '@/sections/AdminDashboard';
-import EmailVerification from '@/sections/EmailVerification';
 import InvoiceViewer from '@/sections/InvoiceViewer';
 import LoginPage from '@/sections/LoginPage';
 import type { Invoice } from '@/types/invoice';
@@ -16,11 +15,10 @@ const ProtectedRoute = () => {
   return isAuth ? <Outlet /> : <Navigate to="/login" replace />;
 };
 
-// Invoice Route Component with Verification
+// Invoice Route Component
 function InvoiceRoute() {
   const { id } = useParams<{ id: string }>();
   const [invoice, setInvoice] = useState<Invoice | null>(null);
-  const [isVerified, setIsVerified] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
@@ -30,10 +28,6 @@ function InvoiceRoute() {
         const found = await getInvoiceById(id);
         if (found) {
           setInvoice(found);
-          // If already approved, skip verification
-          if (found.status === 'approved') {
-            setIsVerified(true);
-          }
         }
         setIsLoading(false);
       }
@@ -65,17 +59,6 @@ function InvoiceRoute() {
     );
   }
 
-  // Show verification if not verified and not already approved
-  if (!isVerified && invoice.status !== 'approved') {
-    return (
-      <EmailVerification
-        invoice={invoice}
-        onVerified={() => setIsVerified(true)}
-      />
-    );
-  }
-
-  // Show invoice
   return <InvoiceViewer invoice={invoice} />;
 }
 

@@ -9,11 +9,11 @@ import {
   Plus,
   Trash2,
   Eye,
-  Copy,
   FileText,
   CheckCircle,
   Clock,
-  Pencil
+  Pencil,
+  Download
 } from 'lucide-react';
 import type { Invoice, InvoiceItem } from '@/types/invoice';
 import {
@@ -186,10 +186,8 @@ export default function AdminDashboard() {
     resetForm();
   };
 
-  const copyLink = (invoiceId: string) => {
-    const link = `${window.location.origin}/invoice/${invoiceId}`;
-    navigator.clipboard.writeText(link);
-    toast.success('Link gekopieerd!');
+  const openInvoice = (invoiceId: string) => {
+    window.open(`#/invoice/${invoiceId}`, '_blank');
   };
 
   const getStatusBadge = (status: string) => {
@@ -335,7 +333,7 @@ export default function AdminDashboard() {
                         rows={4}
                         value={formData.notes}
                         onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
-                        placeholder="Aanvullende opmerkingen..."
+                        placeholder="Schrijf hier uw opmerkingen en voorwaarden voor deze klant..."
                       />
                     </div>
                   </div>
@@ -463,11 +461,11 @@ export default function AdminDashboard() {
                       <Button variant="outline" size="sm" onClick={() => handleEdit(invoice)}>
                         <Pencil className="w-4 h-4 mr-1" /> Bewerken
                       </Button>
-                      <Button variant="outline" size="sm" onClick={() => copyLink(invoice.id)}>
-                        <Copy className="w-4 h-4 mr-1" /> Link
-                      </Button>
-                      <Button variant="outline" size="sm" onClick={() => window.open(`#/invoice/${invoice.id}`, '_blank')}>
+                      <Button variant="outline" size="sm" onClick={() => openInvoice(invoice.id)}>
                         <Eye className="w-4 h-4 mr-1" /> Bekijken
+                      </Button>
+                      <Button variant="outline" size="sm" className="border-brand-blue text-brand-blue hover:bg-brand-blue hover:text-white" onClick={() => openInvoice(invoice.id)}>
+                        <Download className="w-4 h-4 mr-1" /> PDF
                       </Button>
                       <Button variant="destructive" size="sm" onClick={() => handleDelete(invoice.id)}>
                         <Trash2 className="w-4 h-4" />
