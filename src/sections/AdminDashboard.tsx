@@ -15,7 +15,7 @@ import {
   Pencil,
   Download
 } from 'lucide-react';
-import type { Invoice, InvoiceItem } from '@/types/invoice';
+import type { Invoice, InvoiceItem, Deduction } from '@/types/invoice';
 import {
   saveInvoice,
   getAllInvoices,
@@ -31,8 +31,9 @@ export default function AdminDashboard() {
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [items, setItems] = useState<InvoiceItem[]>([
-    { id: generateId(), description: '', quantity: 1, unitPrice: 0, total: 0 }
+    { id: generateId(), description: '', quantity: 1, unitPrice: 0, total: 0, vatable: true }
   ]);
+  const [deductions, setDeductions] = useState<Deduction[]>([]);
 
   const [formData, setFormData] = useState({
     type: 'proforma' as 'proforma' | 'invoice',
@@ -56,9 +57,15 @@ export default function AdminDashboard() {
 
   const calculateTotals = () => {
     const subtotal = items.reduce((sum, item) => sum + item.total, 0);
-    const vatAmount = (subtotal * formData.vatRate) / 100;
-    const total = subtotal + vatAmount;
-    return { subtotal, vatAmount, total };
+    // BTW alleen over regels die belast zijn
+    const vatableBase = items.reduce(
+      (sum, item) => sum + (item.vatable ? item.total : 0),
+      0
+    );
+    const vatAmount = (vatableBase * formData.vatRate) / 100;
+    const discountTotal = deductions.reduce((sum, d) => sum + (d.amount || 0), 0);
+    const total = subtotal + vatAmount - discountTotal;
+    return { subtotal, vatAmount, discountTotal, total };
   };
 
   const addItem = () => {
@@ -67,8 +74,25 @@ export default function AdminDashboard() {
       description: '',
       quantity: 1,
       unitPrice: 0,
-      total: 0
+      total: 0,
+      vatable: true
     }]);
+  };
+
+  const addDeduction = () => {
+    setDeductions([...deductions, {
+      id: generateId(),
+      description: '',
+      amount: 0
+    }]);
+  };
+
+  const removeDeduction = (id: string) => {
+    setDeductions(deductions.filter(d => d.id !== id));
+  };
+
+  const updateDeduction = (id: string, field: keyof Deduction, value: string | number) => {
+    setDeductions(deductions.map(d => (d.id === id ? { ...d, [field]: value } : d)));
   };
 
   const removeItem = (id: string) => {
@@ -77,7 +101,7 @@ export default function AdminDashboard() {
     }
   };
 
-  const updateItem = (id: string, field: keyof InvoiceItem, value: string | number) => {
+  const updateItem = (id: string, field: keyof InvoiceItem, value: string | number | boolean) => {
     setItems(items.map(item => {
       if (item.id === id) {
         const updated = { ...item, [field]: value };
@@ -105,7 +129,8 @@ export default function AdminDashboard() {
       notes: invoice.notes || '',
       vatRate: invoice.vatRate
     });
-    setItems(invoice.items);
+    setItems(invoice.items.map(item => ({ ...item, vatable: item.vatable ?? true })));
+    setDeductions(invoice.deductions || []);
     setShowForm(true);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -122,14 +147,15 @@ export default function AdminDashboard() {
       notes: '',
       vatRate: 21
     });
-    setItems([{ id: generateId(), description: '', quantity: 1, unitPrice: 0, total: 0 }]);
+    setItems([{ id: generateId(), description: '', quantity: 1, unitPrice: 0, total: 0, vatable: true }]);
+    setDeductions([]);
     setShowForm(false);
     setEditingId(null);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const { subtotal, vatAmount, total } = calculateTotals();
+    const { subtotal, vatAmount, discountTotal, total } = calculateTotals();
 
     if (editingId) {
       // Update existing
@@ -145,9 +171,11 @@ export default function AdminDashboard() {
           clientAddress: formData.clientAddress,
           clientKvk: formData.clientKvk,
           items: items,
+          deductions: deductions,
           subtotal,
           vatRate: formData.vatRate,
           vatAmount,
+          discountTotal,
           total,
           notes: formData.notes
         };
@@ -170,9 +198,11 @@ export default function AdminDashboard() {
         clientAddress: formData.clientAddress,
         clientKvk: formData.clientKvk,
         items: items,
+        deductions: deductions,
         subtotal,
         vatRate: formData.vatRate,
         vatAmount,
+        discountTotal,
         total,
         notes: formData.notes,
         status: 'pending'
@@ -345,7 +375,7 @@ export default function AdminDashboard() {
 
                   {items.map((item) => (
                     <div key={item.id} className="grid grid-cols-12 gap-2 items-end bg-gray-50 p-4 rounded-lg">
-                      <div className="col-span-5">
+                      <div className="col-span-4">
                         <Label className="text-xs">Omschrijving</Label>
                         <Input
                           value={item.description}
@@ -370,6 +400,16 @@ export default function AdminDashboard() {
                           step="0.01"
                           value={item.unitPrice}
                           onChange={(e) => updateItem(item.id, 'unitPrice', Number(e.target.value))}
+                        />
+                      </div>
+                      <div className="col-span-1 flex flex-col items-center">
+                        <Label className="text-xs whitespace-nowrap">BTW</Label>
+                        <input
+                          type="checkbox"
+                          className="h-5 w-5 mt-2 accent-brand-blue cursor-pointer"
+                          checked={item.vatable}
+                          onChange={(e) => updateItem(item.id, 'vatable', e.target.checked)}
+                          title="BTW over deze regel berekenen"
                         />
                       </div>
                       <div className="col-span-2">
@@ -397,6 +437,52 @@ export default function AdminDashboard() {
                   </Button>
                 </div>
 
+                {/* Deductions / Kortingen */}
+                <div className="space-y-4">
+                  <h3 className="font-semibold text-gray-700 border-b pb-2">Kortingen / Aftrekposten</h3>
+
+                  {deductions.length === 0 && (
+                    <p className="text-sm text-gray-400">Geen kortingen toegevoegd.</p>
+                  )}
+
+                  {deductions.map((d) => (
+                    <div key={d.id} className="grid grid-cols-12 gap-2 items-end bg-gray-50 p-4 rounded-lg">
+                      <div className="col-span-8">
+                        <Label className="text-xs">Omschrijving</Label>
+                        <Input
+                          value={d.description}
+                          onChange={(e) => updateDeduction(d.id, 'description', e.target.value)}
+                          placeholder="Bijv. Korting, aanbetaling..."
+                        />
+                      </div>
+                      <div className="col-span-3">
+                        <Label className="text-xs">Bedrag (€)</Label>
+                        <Input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={d.amount}
+                          onChange={(e) => updateDeduction(d.id, 'amount', Number(e.target.value))}
+                        />
+                      </div>
+                      <div className="col-span-1">
+                        <Button
+                          type="button"
+                          variant="destructive"
+                          size="sm"
+                          onClick={() => removeDeduction(d.id)}
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
+
+                  <Button type="button" variant="outline" onClick={addDeduction} className="w-full">
+                    <Plus className="w-4 h-4 mr-2" /> Korting Toevoegen
+                  </Button>
+                </div>
+
                 {/* Totals */}
                 <div className="bg-gray-100 p-4 rounded-lg">
                   <div className="flex justify-between py-1">
@@ -407,6 +493,12 @@ export default function AdminDashboard() {
                     <span>BTW ({formData.vatRate}%):</span>
                     <span className="font-mono">€{calculateTotals().vatAmount.toFixed(2)}</span>
                   </div>
+                  {calculateTotals().discountTotal > 0 && (
+                    <div className="flex justify-between py-1 text-red-600">
+                      <span>Kortingen:</span>
+                      <span className="font-mono">- €{calculateTotals().discountTotal.toFixed(2)}</span>
+                    </div>
+                  )}
                   <div className="flex justify-between py-2 text-lg font-bold border-t">
                     <span>Totaal:</span>
                     <span className="font-mono text-brand-orange">€{calculateTotals().total.toFixed(2)}</span>

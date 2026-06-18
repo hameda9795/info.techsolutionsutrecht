@@ -183,6 +183,9 @@ export default function InvoiceViewer({ invoice }: InvoiceViewerProps) {
                   >
                     <td className="py-2.5 px-3 text-[12px] align-top">
                       <div className="font-medium text-gray-800">{item.description}</div>
+                      {item.vatable === false && (
+                        <div className="text-[10px] text-brand-orange font-medium mt-0.5">BTW-vrij</div>
+                      )}
                     </td>
                     <td className="py-2.5 px-3 text-[12px] text-center align-top text-gray-600">
                       {item.quantity}
@@ -210,6 +213,13 @@ export default function InvoiceViewer({ invoice }: InvoiceViewerProps) {
                 <span>BTW ({invoice.vatRate}%)</span>
                 <span>€ {invoice.vatAmount.toFixed(2)}</span>
               </div>
+              {invoice.deductions && invoice.deductions.length > 0 &&
+                invoice.deductions.map((d) => (
+                  <div key={d.id} className="flex justify-between py-1.5 px-3 text-[12px] text-red-600">
+                    <span>{d.description || 'Korting'}</span>
+                    <span>- € {(d.amount || 0).toFixed(2)}</span>
+                  </div>
+                ))}
               <div className="flex justify-between py-2.5 px-3 mt-1.5 bg-brand-blue text-white rounded shadow-sm">
                 <span className="font-semibold text-sm">TOTAAL</span>
                 <span className="font-bold text-base text-brand-orange">

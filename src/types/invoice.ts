@@ -4,6 +4,13 @@ export interface InvoiceItem {
   quantity: number;
   unitPrice: number;
   total: number;
+  vatable: boolean; // Of er BTW over deze regel wordt berekend
+}
+
+export interface Deduction {
+  id: string;
+  description: string;
+  amount: number;
 }
 
 export interface Invoice {
@@ -18,9 +25,11 @@ export interface Invoice {
   clientAddress?: string;
   clientKvk?: string;
   items: InvoiceItem[];
+  deductions?: Deduction[];
   subtotal: number;
   vatRate: number;
   vatAmount: number;
+  discountTotal?: number;
   total: number;
   notes?: string;
   status: 'pending' | 'approved' | 'rejected';
