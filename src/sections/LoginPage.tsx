@@ -6,20 +6,26 @@ import { Card, CardContent, CardHeader, CardTitle, CardFooter } from '@/componen
 import { Lock, Mail } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'sonner';
+import { signInWithEmailAndPassword } from 'firebase/auth';
+import { auth } from '@/lib/firebase';
 
 export default function LoginPage() {
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
+    const [busy, setBusy] = useState(false);
     const navigate = useNavigate();
 
-    const handleLogin = (e: React.FormEvent) => {
+    const handleLogin = async (e: React.FormEvent) => {
         e.preventDefault();
-        if (email === 'hameda9795@gmail.com' && password === '102067438Gerd.com') {
-            localStorage.setItem('isAuthenticated', 'true');
+        setBusy(true);
+        try {
+            await signInWithEmailAndPassword(auth, email, password);
             toast.success('Ingelogd!');
             navigate('/');
-        } else {
+        } catch {
             toast.error('Ongeldige inloggegevens');
+        } finally {
+            setBusy(false);
         }
     };
 
@@ -63,8 +69,8 @@ export default function LoginPage() {
                         </div>
                     </CardContent>
                     <CardFooter>
-                        <Button type="submit" className="w-full bg-brand-blue hover:bg-blue-900">
-                            Inloggen
+                        <Button type="submit" disabled={busy} className="w-full bg-brand-blue hover:bg-blue-900">
+                            {busy ? 'Bezig…' : 'Inloggen'}
                         </Button>
                     </CardFooter>
                 </form>
