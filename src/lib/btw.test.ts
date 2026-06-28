@@ -9,6 +9,7 @@ import {
   isBtwReportable,
   btwReportableAmount,
   reportableExcl,
+  lineTypeSplit,
   computeQuarterReport,
   computeMonthlyReport,
   monthLabel,
@@ -25,7 +26,7 @@ const doc = (p: Partial<Document>): Document => ({
   documentNumber: p.documentNumber ?? null,
   status: p.status ?? 'sent',
   issueDate: p.issueDate ?? '2026-02-10',
-  items: [],
+  items: p.items ?? [],
   subtotalExclBtw: p.subtotalExclBtw ?? 0,
   btwPercentage: 21,
   btwAmount: p.btwAmount ?? 0,
@@ -36,6 +37,27 @@ const doc = (p: Partial<Document>): Document => ({
   originalInvoiceId: p.originalInvoiceId,
   createdAt: '2026-02-10T00:00:00.000Z',
   updatedAt: '2026-02-10T00:00:00.000Z',
+});
+
+// Minimal purchase-invoice factory (only the fields BTW logic reads). Defaults
+// to NL21 with the amount already split, matching the old test fixtures.
+const purchase = (p: Partial<PurchaseInvoice>): PurchaseInvoice => ({
+  id: p.id ?? 'pur',
+  supplierName: p.supplierName ?? 'Hosting BV',
+  supplierInvoiceNumber: p.supplierInvoiceNumber ?? 'H-1',
+  invoiceDate: p.invoiceDate ?? '2026-02-10',
+  category: p.category ?? 'Hosting & Software',
+  btwCode: p.btwCode ?? 'NL21',
+  amountInput: p.amountInput ?? p.amountExclBtw ?? 0,
+  amountInputMode: p.amountInputMode ?? 'EXCL',
+  amountExclBtw: p.amountExclBtw ?? 0,
+  btwPercentage: p.btwPercentage ?? 21,
+  btwAmount: p.btwAmount ?? 0,
+  amountInclBtw: p.amountInclBtw ?? round2((p.amountExclBtw ?? 0) + (p.btwAmount ?? 0)),
+  paymentStatus: p.paymentStatus ?? 'paid',
+  paidVia: p.paidVia ?? 'ZAKELIJK',
+  createdAt: p.createdAt ?? '',
+  updatedAt: p.updatedAt ?? '',
 });
 
 describe('kwartaal-indeling (factuurstelsel)', () => {
@@ -175,23 +197,15 @@ describe('netto btw te betalen', () => {
     totalInclBtw: 121,
     issueDate: '2026-06-01',
   });
-  const purchase: PurchaseInvoice = {
-    id: 'pur',
-    supplierName: 'Hosting BV',
-    supplierInvoiceNumber: 'H-99',
+  const hostingPurchase = purchase({
     invoiceDate: '2026-04-20',
-    category: 'Hosting & Software',
     amountExclBtw: 200,
-    btwPercentage: 21,
     btwAmount: 42,
     amountInclBtw: 242,
-    paymentStatus: 'paid',
-    createdAt: '',
-    updatedAt: '',
-  };
+  });
 
   it('= btw verkoop - btw creditnota - voorbelasting', () => {
-    const r = computeQuarterReport([invoice, credit], [purchase], 2026, 2);
+    const r = computeQuarterReport([invoice, credit], [hostingPurchase], 2026, 2);
     expect(r.btwVerkoop).toBe(210);
     expect(r.creditnotaBtw).toBe(21);
     expect(r.voorbelasting).toBe(42);
@@ -199,10 +213,164 @@ describe('netto btw te betalen', () => {
   });
 
   it('excludes documents/purchases outside the quarter', () => {
-    const r = computeQuarterReport([invoice, credit], [purchase], 2026, 1);
+    const r = computeQuarterReport([invoice, credit], [hostingPurchase], 2026, 1);
     expect(r.invoices).toHaveLength(0);
     expect(r.purchases).toHaveLength(0);
     expect(r.nettoBtwTeBetalen).toBe(0);
+  });
+});
+
+describe('rubriek 4a/4b/5b — reverse charge (spec-voorbeelden)', () => {
+  it('EU btw verlegd (OpenAI €19,01): 4b + 5b, netto-effect 0', () => {
+    const openai = purchase({
+      btwCode: 'EU_VERLEGD',
+      amountInput: 19.01,
+      amountExclBtw: 19.01,
+      btwAmount: 3.99,
+      amountInclBtw: 22.99,
+    });
+    const r = computeQuarterReport([], [openai], 2026, 1);
+    expect(r.rubriek4b).toBe(19.01);
+    expect(r.rubriek4a).toBe(0);
+    expect(r.voorbelasting).toBe(3.99);
+    expect(r.nettoBtwTeBetalen).toBe(0);
+  });
+
+  it('Buiten-EU btw verlegd (Claude €18,00): 4a + 5b, netto-effect 0', () => {
+    const claude = purchase({
+      btwCode: 'BUITEN_EU_VERLEGD',
+      amountInput: 18,
+      amountExclBtw: 18,
+      btwAmount: 3.78,
+      amountInclBtw: 21.78,
+    });
+    const r = computeQuarterReport([], [claude], 2026, 1);
+    expect(r.rubriek4a).toBe(18);
+    expect(r.rubriek4b).toBe(0);
+    expect(r.voorbelasting).toBe(3.78);
+    expect(r.nettoBtwTeBetalen).toBe(0);
+  });
+
+  it('Btw niet aftrekbaar (Canva €12,00 incl.): kosten = 12,00, geen aangifte-effect', () => {
+    const canva = purchase({
+      btwCode: 'NIET_AFTREKBAAR',
+      amountInput: 12,
+      amountInputMode: 'INCL',
+      amountExclBtw: 12,
+      btwAmount: 0,
+      amountInclBtw: 12,
+    });
+    const r = computeQuarterReport([], [canva], 2026, 1);
+    expect(r.inkoopExclBtw).toBe(12);
+    expect(r.rubriek4a).toBe(0);
+    expect(r.rubriek4b).toBe(0);
+    expect(r.voorbelasting).toBe(0);
+    expect(r.nettoBtwTeBetalen).toBe(0);
+  });
+
+  it('Btw niet aftrekbaar (Google €21,99 incl.): kosten = 21,99, geen aangifte-effect', () => {
+    const google = purchase({
+      btwCode: 'NIET_AFTREKBAAR',
+      amountInput: 21.99,
+      amountInputMode: 'INCL',
+      amountExclBtw: 21.99,
+      btwAmount: 0,
+      amountInclBtw: 21.99,
+    });
+    const r = computeQuarterReport([], [google], 2026, 1);
+    expect(r.inkoopExclBtw).toBe(21.99);
+    expect(r.voorbelasting).toBe(0);
+    expect(r.nettoBtwTeBetalen).toBe(0);
+  });
+
+  it('Geen btw: geen enkel aangifte-effect', () => {
+    const noBtw = purchase({ btwCode: 'GEEN', amountInput: 30, amountExclBtw: 30, btwAmount: 0, amountInclBtw: 30 });
+    const r = computeQuarterReport([], [noBtw], 2026, 1);
+    expect(r.inkoopExclBtw).toBe(30);
+    expect(r.voorbelasting).toBe(0);
+    expect(r.nettoBtwTeBetalen).toBe(0);
+  });
+
+  it('verlegde btw telt niet dubbel mee naast normale NL21-voorbelasting', () => {
+    const nlPurchase = purchase({ amountExclBtw: 100, btwAmount: 21, amountInclBtw: 121 });
+    const openai = purchase({
+      id: 'openai',
+      btwCode: 'EU_VERLEGD',
+      amountInput: 19.01,
+      amountExclBtw: 19.01,
+      btwAmount: 3.99,
+      amountInclBtw: 22.99,
+    });
+    const r = computeQuarterReport([], [nlPurchase, openai], 2026, 1);
+    // 5b = 21 (NL21) + 3.99 (verlegd) — verschuldigde kant heeft alleen de 3.99 erbij, dus
+    // het netto-effect van de NL21-aankoop blijft -21 en van de verlegde aankoop blijft 0.
+    expect(r.voorbelasting).toBe(24.99);
+    expect(r.nettoBtwTeBetalen).toBe(-21);
+  });
+});
+
+describe('lineTypeSplit (Dienst vs Doorverkoop)', () => {
+  it('splits a document evenly across Dienst/Doorverkoop lines', () => {
+    const d = doc({
+      subtotalExclBtw: 200,
+      btwAmount: 42,
+      totalInclBtw: 242,
+      items: [
+        {
+          id: '1',
+          description: 'Website',
+          quantity: 1,
+          unitPriceExclBtw: 150,
+          btwPercentage: 21,
+          lineTotalExclBtw: 150,
+          lineBtwAmount: 31.5,
+          lineTotalInclBtw: 181.5,
+          lineType: 'DIENST',
+        },
+        {
+          id: '2',
+          description: 'Domeinnaam',
+          quantity: 1,
+          unitPriceExclBtw: 50,
+          btwPercentage: 21,
+          lineTotalExclBtw: 50,
+          lineBtwAmount: 10.5,
+          lineTotalInclBtw: 60.5,
+          lineType: 'DOORVERKOOP',
+        },
+      ],
+    });
+    const split = lineTypeSplit(d);
+    expect(split.dienstExcl).toBe(150);
+    expect(split.doorverkoopExcl).toBe(50);
+    expect(round2(split.dienstExcl + split.doorverkoopExcl)).toBe(reportableExcl(d));
+  });
+
+  it('a Doorverkoop sale never affects voorbelasting — only a real PurchaseInvoice can', () => {
+    const d = doc({
+      documentNumber: 'F-2026-0030',
+      subtotalExclBtw: 50,
+      btwAmount: 10.5,
+      totalInclBtw: 60.5,
+      items: [
+        {
+          id: '1',
+          description: 'Domeinnaam doorverkocht',
+          quantity: 1,
+          unitPriceExclBtw: 50,
+          btwPercentage: 21,
+          lineTotalExclBtw: 50,
+          lineBtwAmount: 10.5,
+          lineTotalInclBtw: 60.5,
+          lineType: 'DOORVERKOOP',
+        },
+      ],
+    });
+    // No PurchaseInvoice exists anywhere — voorbelasting/kosten must stay 0.
+    const r = computeQuarterReport([d], [], 2026, quarterOf(d.issueDate));
+    expect(r.voorbelasting).toBe(0);
+    expect(r.inkoopExclBtw).toBe(0);
+    expect(r.btwVerkoop).toBe(10.5); // de verkoop zelf telt wel gewoon mee in rubriek 1a
   });
 });
 
@@ -232,20 +400,12 @@ describe('maandoverzicht (computeMonthlyReport)', () => {
       totalInclBtw: 1210,
       issueDate: '2026-05-10',
     });
-    const purchase: PurchaseInvoice = {
-      id: 'pur',
-      supplierName: 'Hosting BV',
-      supplierInvoiceNumber: 'H-99',
+    const hostingPurchase = purchase({
       invoiceDate: '2026-05-20',
-      category: 'Hosting & Software',
       amountExclBtw: 200,
-      btwPercentage: 21,
       btwAmount: 42,
       amountInclBtw: 242,
-      paymentStatus: 'paid',
-      createdAt: '',
-      updatedAt: '',
-    };
+    });
     const payment: Payment = {
       id: 'pay1',
       documentId: 'inv-may',
@@ -255,7 +415,7 @@ describe('maandoverzicht (computeMonthlyReport)', () => {
       createdAt: '',
     };
 
-    const rows = computeMonthlyReport([invoice], [purchase], [payment], 2026);
+    const rows = computeMonthlyReport([invoice], [hostingPurchase], [payment], 2026);
     const may = rows[4]; // index 4 = month 5
     expect(may.omzetExcl).toBe(1000);
     expect(may.kostenExcl).toBe(200);
@@ -333,23 +493,15 @@ describe('maandoverzicht (computeMonthlyReport)', () => {
       totalInclBtw: 60.5,
       issueDate: '2026-03-20',
     });
-    const purchase: PurchaseInvoice = {
-      id: 'pur',
-      supplierName: 'Hosting BV',
-      supplierInvoiceNumber: 'H-1',
+    const hostingPurchase = purchase({
       invoiceDate: '2026-01-10',
-      category: 'Hosting & Software',
       amountExclBtw: 100,
-      btwPercentage: 21,
       btwAmount: 21,
       amountInclBtw: 121,
-      paymentStatus: 'paid',
-      createdAt: '',
-      updatedAt: '',
-    };
+    });
 
     const documents = [advance, eind, credit];
-    const purchases = [purchase];
+    const purchases = [hostingPurchase];
     const quarterReport = computeQuarterReport(documents, purchases, 2026, 1);
     const monthly = computeMonthlyReport(documents, purchases, [], 2026);
     const q1Months = monthly.filter((r) => r.quarter === 1);

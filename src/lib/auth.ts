@@ -1,23 +1,29 @@
 import { useEffect, useState } from 'react';
-import { onAuthStateChanged, type User } from 'firebase/auth';
-import { auth } from './firebase';
+import { checkSession, login as apiLogin, logout as apiLogout } from './db';
 
 /**
- * Track the current Firebase Authentication user. `loading` is true until the
- * first auth-state callback fires, so route guards don't flash the login page
- * during the initial session check (Firebase restores the session from storage).
+ * Track whether there's a valid session with the backend (replaces the old
+ * Firebase onAuthStateChanged listener). `loading` is true until the first
+ * check resolves, so route guards don't flash the login page during the
+ * initial session check.
  */
-export const useAuthUser = (): { user: User | null; loading: boolean } => {
-  const [user, setUser] = useState<User | null>(auth.currentUser);
+export const useAuthUser = (): { user: boolean; loading: boolean } => {
+  const [user, setUser] = useState(false);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (u) => {
-      setUser(u);
-      setLoading(false);
-    });
-    return unsubscribe;
+    checkSession()
+      .then(setUser)
+      .finally(() => setLoading(false));
   }, []);
 
   return { user, loading };
+};
+
+export const login = async (password: string): Promise<void> => {
+  await apiLogin(password);
+};
+
+export const logout = async (): Promise<void> => {
+  await apiLogout();
 };

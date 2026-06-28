@@ -94,6 +94,46 @@ export const reportableExcl = (docu: Document): number => {
   return round2(docu.subtotalExclBtw - linkedAdvanceExcl(docu));
 };
 
+// ===== Inkoopfacturen: rubriek-toewijzing per btw-code =====
+//
+// Belangrijk: alleen een ECHTE inkoopfactuur (PurchaseInvoice) raakt deze
+// rubrieken. Doorverkoop-regels op een verkoopfactuur maken nooit een
+// inkoopfactuur of inkoop-btw aan (zie DocumentItem.lineType).
+//
+// NL21/NL9          -> 5b (aftrekbare voorbelasting).
+// EU_VERLEGD        -> 4b (grondslag) + 5b (zelf berekende, aftrekbare btw).
+// BUITEN_EU_VERLEGD -> 4a (grondslag) + 5b (zelf berekende, aftrekbare btw).
+// GEEN/NIET_AFTREKBAAR -> geen enkele rubriek; volledige bedrag is kosten.
+//
+// Voor verlegde btw (EU/Buiten-EU) wordt hetzelfde bedrag opgeteld bij de
+// verschuldigde btw (alsof zelf gefactureerd) én bij de aftrekbare voorbelasting
+// — het netto-effect op "Netto btw te betalen" is dus 0, maar de grondslag
+// (4a/4b) en de btw zelf (5b) moeten wel zichtbaar in de aangifte staan.
+
+/** Rubriek 4a: grondslag inkoop van buiten de EU (btw verlegd). */
+export const purchaseRubriek4a = (p: PurchaseInvoice): number =>
+  p.btwCode === 'BUITEN_EU_VERLEGD' ? p.amountExclBtw : 0;
+
+/** Rubriek 4b: grondslag inkoop binnen de EU (btw verlegd). */
+export const purchaseRubriek4b = (p: PurchaseInvoice): number =>
+  p.btwCode === 'EU_VERLEGD' ? p.amountExclBtw : 0;
+
+/** Aftrekbare voorbelasting (rubriek 5b) — NL21/NL9 + de zelf berekende verlegde btw. */
+export const purchaseVoorbelasting = (p: PurchaseInvoice): number =>
+  p.btwCode === 'NL21' ||
+  p.btwCode === 'NL9' ||
+  p.btwCode === 'EU_VERLEGD' ||
+  p.btwCode === 'BUITEN_EU_VERLEGD'
+    ? p.btwAmount
+    : 0;
+
+/** Verlegde btw die ook bij de verschuldigde btw moet (annuleert tegen de voorbelasting hierboven). */
+export const purchaseVerlegdVerschuldigd = (p: PurchaseInvoice): number =>
+  p.btwCode === 'EU_VERLEGD' || p.btwCode === 'BUITEN_EU_VERLEGD' ? p.btwAmount : 0;
+
+/** Kosten (excl. btw waar aftrekbaar, anders het volledige incl.-bedrag) voor de management-rapportage. */
+export const purchaseKosten = (p: PurchaseInvoice): number => p.amountExclBtw;
+
 // ===== Genormaliseerde rij voor de aangifte =====
 
 export interface BtwInvoiceRow {
@@ -147,12 +187,14 @@ export interface BtwQuarterReport {
   creditNotes: BtwInvoiceRow[]; // creditnota's
   purchases: PurchaseInvoice[]; // kosten / inkoopfacturen
   // Samenvatting:
-  verkoopExclBtw: number;
-  btwVerkoop: number;
+  verkoopExclBtw: number; // rubriek 1a grondslag
+  btwVerkoop: number; // rubriek 1a btw
   creditnotaExclBtw: number; // magnitude (positief)
   creditnotaBtw: number; // magnitude (positief)
-  inkoopExclBtw: number;
-  voorbelasting: number;
+  inkoopExclBtw: number; // kosten (excl. waar aftrekbaar, anders volledig bedrag)
+  rubriek4a: number; // grondslag inkoop van buiten de EU (btw verlegd)
+  rubriek4b: number; // grondslag inkoop binnen de EU (btw verlegd)
+  voorbelasting: number; // rubriek 5b: NL21/NL9 + zelf berekende verlegde btw
   nettoBtwTeBetalen: number;
 }
 
@@ -162,7 +204,9 @@ const sum = (ns: number[]): number => round2(ns.reduce((s, n) => s + n, 0));
  * Stel het btw-rapport voor één kwartaal samen.
  * Documenten worden ingedeeld op issue_date (factuurstelsel), inkoopfacturen op invoiceDate.
  *
- * Netto btw te betalen = btw verkoop − btw creditnota's − voorbelasting.
+ * Netto btw te betalen = btw verkoop − btw creditnota's + verlegde btw (4a/4b) − voorbelasting (5b).
+ * De verlegde btw zit zowel in de verschuldigde kant als in de voorbelasting (5b), dus die
+ * twee termen heffen elkaar exact op — het netto-effect van reverse charge is altijd 0.
  */
 export const computeQuarterReport = (
   documents: Document[],
@@ -189,9 +233,14 @@ export const computeQuarterReport = (
   // Creditnota-rijen zijn negatief; toon de correctie als positieve magnitude.
   const creditnotaExclBtw = round2(-sum(creditNotes.map((r) => r.btwReportableExcl)));
   const creditnotaBtw = round2(-sum(creditNotes.map((r) => r.btwReportableAmount)));
-  const inkoopExclBtw = sum(periodPurchases.map((p) => p.amountExclBtw));
-  const voorbelasting = sum(periodPurchases.map((p) => p.btwAmount));
-  const nettoBtwTeBetalen = round2(btwVerkoop - creditnotaBtw - voorbelasting);
+  const inkoopExclBtw = sum(periodPurchases.map(purchaseKosten));
+  const rubriek4a = sum(periodPurchases.map(purchaseRubriek4a));
+  const rubriek4b = sum(periodPurchases.map(purchaseRubriek4b));
+  const voorbelasting = sum(periodPurchases.map(purchaseVoorbelasting));
+  const btwVerlegdVerschuldigd = sum(periodPurchases.map(purchaseVerlegdVerschuldigd));
+  const nettoBtwTeBetalen = round2(
+    btwVerkoop + btwVerlegdVerschuldigd - creditnotaBtw - voorbelasting
+  );
 
   const { start, end } = quarterRange(year, quarter);
 
@@ -210,6 +259,8 @@ export const computeQuarterReport = (
     creditnotaExclBtw,
     creditnotaBtw,
     inkoopExclBtw,
+    rubriek4a,
+    rubriek4b,
     voorbelasting,
     nettoBtwTeBetalen,
   };
@@ -250,6 +301,27 @@ export interface MonthlyProjectRevenue {
   omzetExcl: number;
 }
 
+/**
+ * Verdeel de (reeds aanbetaling/creditnota-gecorrigeerde) excl.-omzet van een document
+ * naar verhouding van de Dienst- versus Doorverkoop-regels erop. Puur voor de interne
+ * winstrapportage — heeft geen invloed op de btw-aangifte (die telt alle regels samen).
+ */
+export interface LineTypeSplit {
+  dienstExcl: number;
+  doorverkoopExcl: number;
+}
+
+export const lineTypeSplit = (docu: Document): LineTypeSplit => {
+  const reportable = reportableExcl(docu);
+  const totalRaw = docu.items.reduce((s, i) => s + i.lineTotalExclBtw, 0);
+  if (totalRaw === 0) return { dienstExcl: reportable, doorverkoopExcl: 0 };
+  const doorverkoopRaw = docu.items
+    .filter((i) => i.lineType === 'DOORVERKOOP')
+    .reduce((s, i) => s + i.lineTotalExclBtw, 0);
+  const doorverkoopExcl = round2(reportable * (doorverkoopRaw / totalRaw));
+  return { dienstExcl: round2(reportable - doorverkoopExcl), doorverkoopExcl };
+};
+
 export interface MonthlyReportRow {
   year: number;
   month: number; // 1-12
@@ -257,6 +329,10 @@ export interface MonthlyReportRow {
   quarter: Quarter;
   /** Omzet excl. btw, netto van creditnota's (factuurstelsel, issue_date). */
   omzetExcl: number;
+  /** Omzetdeel uit eigen diensten (Dienst-regels). */
+  omzetDienstExcl: number;
+  /** Omzetdeel uit doorverkochte zaken (Doorverkoop-regels, bv. domein/hosting). */
+  omzetDoorverkoopExcl: number;
   /** Inkoop/kosten excl. btw (op factuurdatum). */
   kostenExcl: number;
   /** omzetExcl − kostenExcl: bedrijfsresultaat vóór inkomstenbelasting. */
@@ -318,9 +394,12 @@ export const computeMonthlyReport = (
     const paymentsInMonth = yearPayments.filter((p) => monthOf(p.paymentDate) === month);
 
     const omzetExcl = sum(docsInMonth.map(reportableExcl));
+    const omzetDienstExcl = sum(docsInMonth.map((d) => lineTypeSplit(d).dienstExcl));
+    const omzetDoorverkoopExcl = sum(docsInMonth.map((d) => lineTypeSplit(d).doorverkoopExcl));
     const btwVerschuldigd = sum(docsInMonth.map(btwReportableAmount));
-    const kostenExcl = sum(purchasesInMonth.map((p) => p.amountExclBtw));
-    const voorbelasting = sum(purchasesInMonth.map((p) => p.btwAmount));
+    const kostenExcl = sum(purchasesInMonth.map(purchaseKosten));
+    const voorbelasting = sum(purchasesInMonth.map(purchaseVoorbelasting));
+    const btwVerlegdVerschuldigd = sum(purchasesInMonth.map(purchaseVerlegdVerschuldigd));
     const ontvangenIncl = sum(paymentsInMonth.map((p) => p.amount));
     const ontvangenExcl = sum(paymentsInMonth.map(exclPortionOf));
 
@@ -340,11 +419,13 @@ export const computeMonthlyReport = (
       label: monthLabel(year, month),
       quarter: quarterOfMonth(month),
       omzetExcl,
+      omzetDienstExcl,
+      omzetDoorverkoopExcl,
       kostenExcl,
       resultaat: round2(omzetExcl - kostenExcl),
       btwVerschuldigd,
       voorbelasting,
-      nettoBtw: round2(btwVerschuldigd - voorbelasting),
+      nettoBtw: round2(btwVerschuldigd + btwVerlegdVerschuldigd - voorbelasting),
       ontvangenIncl,
       ontvangenExcl,
       projects,

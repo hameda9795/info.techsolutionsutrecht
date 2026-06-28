@@ -1,18 +1,12 @@
-import type { AmountMode, DocumentItem, PurchaseBtwCode, SettledAdvance } from '@/types';
+// Kept byte-for-byte identical in logic to src/lib/calc.ts in the frontend repo —
+// this is the server-side source of truth used to recompute/validate financial
+// totals instead of trusting client-supplied numbers (see routes/documents.ts and
+// routes/purchaseInvoices.ts).
+import type { AmountMode, DocumentItem, PurchaseBtwCode, SettledAdvance } from '../types.js';
 
-/** Round to 2 decimals (cents), avoiding binary float drift. */
 export const round2 = (n: number): number => Math.round((n + Number.EPSILON) * 100) / 100;
 
-/** Format a number as Dutch currency, e.g. 1234.5 -> "€ 1.234,50". */
-export const formatEUR = (n: number): string =>
-  '€ ' +
-  n.toLocaleString('nl-NL', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-
-/** Recompute the derived line totals for a single item (BTW per regel). */
 export const recalcItem = (item: DocumentItem): DocumentItem => {
-  // Gross-entry mode: the incl.-btw amount is the fixed input (e.g. "I received
-  // €100 as aanbetaling"). Derive excl./btw backwards so they sum exactly back
-  // to it — a forward (excl -> btw) calc can land 1 cent off due to double rounding.
   if (item.fixedInclBtw != null) {
     const lineTotalInclBtw = round2(item.fixedInclBtw);
     const lineTotalExclBtw = round2(lineTotalInclBtw / (1 + item.btwPercentage / 100));
@@ -30,18 +24,15 @@ export interface DocumentTotals {
   subtotalExclBtw: number;
   btwAmount: number;
   totalInclBtw: number;
-  /** Dominant BTW rate across the lines (informational, for the header). */
   btwPercentage: number;
 }
 
-/** Sum the (recalculated) lines into document-level totals. */
 export const recalcDocument = (items: DocumentItem[]): DocumentTotals => {
   const lines = items.map(recalcItem);
   const subtotalExclBtw = round2(lines.reduce((s, l) => s + l.lineTotalExclBtw, 0));
   const btwAmount = round2(lines.reduce((s, l) => s + l.lineBtwAmount, 0));
   const totalInclBtw = round2(subtotalExclBtw + btwAmount);
 
-  // Dominant rate = the rate carrying the largest excl. base.
   const byRate = new Map<number, number>();
   for (const l of lines) {
     byRate.set(l.btwPercentage, (byRate.get(l.btwPercentage) ?? 0) + l.lineTotalExclBtw);
@@ -70,10 +61,6 @@ export interface AdvanceSettlement {
   nogTeBetalenInclBtw: number;
 }
 
-/**
- * Apply already-invoiced advance payments (aanbetalingen) to a document's totals.
- * Used for the eindfactuur: full work minus the selected aanbetalingsfacturen.
- */
 export const applyAdvances = (
   totals: DocumentTotals,
   advances: SettledAdvance[]
@@ -101,16 +88,6 @@ export interface PurchaseAmounts {
   amountInclBtw: number;
 }
 
-/**
- * Reken een inkoopfactuur door op basis van de btw-code.
- *
- * - NL21/NL9: het ingevoerde bedrag is excl. óf incl. btw (amountInputMode bepaalt dit);
- *   het percentage volgt uit de code.
- * - EU_VERLEGD/BUITEN_EU_VERLEGD: het ingevoerde bedrag is altijd excl. btw; het systeem
- *   berekent zelf 21% (reverse charge — geen daadwerkelijke betaling van die btw aan de
- *   leverancier, alleen relevant voor de aangifte, zie btw.ts voor de rubriek-verwerking).
- * - GEEN/NIET_AFTREKBAAR: geen splitsing — het volledige ingevoerde bedrag is de kostenpost.
- */
 export const recalcPurchaseAmounts = (
   btwCode: PurchaseBtwCode,
   amountInput: number,

@@ -4,19 +4,10 @@ import type {
   DocumentStatus,
   DocumentType,
   InvoiceSubtype,
-  Payment,
   SettledAdvance,
 } from '@/types';
 import { recalcDocument, round2 } from './calc';
-import { allocateNumber } from './numbering';
-import { isLocked } from './lock';
-import {
-  generateId,
-  saveDocument,
-  savePayment,
-  getPaymentsByDocument,
-  getDocument,
-} from './db';
+import { generateId, saveDocument, finalizeDocumentApi, recordPaymentApi, createCreditNoteApi } from './db';
 
 /** Net amount the customer still owes on an invoice (full total minus settled advances). */
 export const amountDue = (docu: Document): number => {
@@ -56,7 +47,11 @@ export interface DraftInput {
   reason?: string;
 }
 
-/** Build a fresh draft (concept) document with recalculated totals. */
+/**
+ * Build a fresh draft (concept) document for the form's live preview. The backend
+ * always recomputes totals from `items` on save, so this is a client-side preview
+ * only — never the source of truth.
+ */
 export const buildDraft = (input: DraftInput): Document => {
   const totals = recalcDocument(input.items);
   const now = new Date().toISOString();
@@ -88,115 +83,32 @@ export const buildDraft = (input: DraftInput): Document => {
   };
 };
 
-/** Re-derive totals + remaining for an editable (draft) document, then persist. */
-export const saveDraftEdits = async (docu: Document): Promise<Document> => {
-  if (isLocked(docu)) throw new Error('Document is vergrendeld en kan niet worden bewerkt.');
-  const totals = recalcDocument(docu.items);
-  const updated: Document = {
-    ...docu,
-    ...totals,
-    remainingAmount: round2(
-      totals.totalInclBtw -
-        (docu.settledAdvances ?? []).reduce((s, a) => s + a.inclBtw, 0) -
-        docu.paidAmount
-    ),
-    updatedAt: new Date().toISOString(),
-  };
-  await saveDocument(updated);
-  return updated;
-};
+/**
+ * Persist edits to a draft. The backend re-checks the draft lock and recomputes
+ * totals server-side (never trusting client-sent numbers) and returns the
+ * canonical, saved document.
+ */
+export const saveDraftEdits = (docu: Document): Promise<Document> => saveDocument(docu);
 
 /**
- * Finalize a concept: allocate the gapless official number and move to "sent".
- * No-op if it already has a number.
+ * Finalize a concept: atomically allocate the gapless official number and move
+ * to "sent". No-op (idempotent) if it already has a number. The allocation and
+ * status change happen together in one database transaction on the server.
  */
-export const finalizeDocument = async (docu: Document): Promise<Document> => {
-  if (docu.documentNumber) return docu;
-  const number = await allocateNumber(docu.documentType);
-  const updated: Document = {
-    ...docu,
-    documentNumber: number,
-    status: 'sent',
-    updatedAt: new Date().toISOString(),
-  };
-  await saveDocument(updated);
-  return updated;
-};
+export const finalizeDocument = (docu: Document): Promise<Document> =>
+  finalizeDocumentApi(docu.id);
 
-const invoiceStatusFor = (due: number, paid: number): Document['status'] => {
-  if (paid <= 0) return 'sent';
-  if (round2(paid) >= round2(due)) return 'paid';
-  return 'partially_paid';
-};
-
-/** Record a payment against an invoice and update its paid/remaining/status. */
-export const recordPayment = async (
+/** Record a payment against an invoice; the server updates paid/remaining/status atomically. */
+export const recordPayment = (
   docu: Document,
   input: { amount: number; paymentDate: string; paymentMethod?: string; note?: string }
-): Promise<Document> => {
-  const payment: Payment = {
-    id: generateId(),
-    documentId: docu.id,
-    projectId: docu.projectId,
-    amount: input.amount,
-    paymentDate: input.paymentDate,
-    paymentMethod: input.paymentMethod,
-    note: input.note,
-    createdAt: new Date().toISOString(),
-  };
-  await savePayment(payment);
-  return recomputePayments(docu);
-};
-
-/** Recompute paidAmount/remainingAmount/status from all payments for the document. */
-export const recomputePayments = async (docu: Document): Promise<Document> => {
-  const payments = await getPaymentsByDocument(docu.id);
-  const paid = round2(payments.reduce((s, p) => s + p.amount, 0));
-  const due = amountDue(docu);
-  // Don't override terminal states like 'credited'.
-  const status = docu.status === 'credited' ? 'credited' : invoiceStatusFor(due, paid);
-  const updated: Document = {
-    ...docu,
-    paidAmount: paid,
-    remainingAmount: round2(due - paid),
-    status,
-    updatedAt: new Date().toISOString(),
-  };
-  await saveDocument(updated);
-  return updated;
-};
+): Promise<Document> => recordPaymentApi(docu.id, input);
 
 /**
- * Create a creditnota for an existing invoice and mark the original "credited".
- * The credit document mirrors the invoice items (or a provided subset).
+ * Create a creditnota for an existing invoice and mark the original "credited"
+ * if fully credited. Handled atomically on the server.
  */
-export const createCreditNote = async (
+export const createCreditNote = (
   original: Document,
   opts: { items?: DocumentItem[]; reason: string; issueDate: string }
-): Promise<Document> => {
-  const items = opts.items ?? original.items;
-  const credit = buildDraft({
-    projectId: original.projectId,
-    clientId: original.clientId,
-    documentType: 'CREDIT_NOTE',
-    issueDate: opts.issueDate,
-    items,
-    originalInvoiceId: original.id,
-    reason: opts.reason,
-  });
-  await saveDocument(credit);
-
-  // Only mark the original "credited" when the credit note covers the full
-  // invoice amount. A partial creditnota leaves the invoice open for the rest,
-  // so its remaining amount keeps showing up in the openstaand-overzicht.
-  const isFullCredit = round2(credit.totalInclBtw) >= round2(original.totalInclBtw);
-  const updatedOriginal = await getDocument(original.id);
-  if (updatedOriginal && isFullCredit) {
-    await saveDocument({
-      ...updatedOriginal,
-      status: 'credited',
-      updatedAt: new Date().toISOString(),
-    });
-  }
-  return credit;
-};
+): Promise<Document> => createCreditNoteApi(original.id, opts);

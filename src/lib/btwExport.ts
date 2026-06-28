@@ -1,6 +1,6 @@
 import jsPDF from 'jspdf';
 import type { BtwQuarterReport, MonthlyReportRow } from './btw';
-import { COMPANY_INFO } from '@/types';
+import { COMPANY_INFO, purchaseBtwCodeLabel } from '@/types';
 
 /** Bedrag als platte string met 2 decimalen (komma), bv. "1234,50" — voor CSV/PDF. */
 const nl = (n: number): string =>
@@ -15,13 +15,15 @@ const triggerDownload = (blob: Blob, filename: string) => {
   URL.revokeObjectURL(url);
 };
 
-/** De zes samenvattingsregels die in Mijn Belastingdienst Zakelijk ingevoerd worden. */
+/** De samenvattingsregels die in Mijn Belastingdienst Zakelijk ingevoerd worden. */
 const summaryRows = (r: BtwQuarterReport): [string, number][] => [
-  ['Verkoop excl. btw', r.verkoopExclBtw],
-  ['BTW verkoop', r.btwVerkoop],
+  ['1a - Verkoop excl. btw (binnenland, 21%)', r.verkoopExclBtw],
+  ['1a - BTW verkoop', r.btwVerkoop],
   ['Creditnota correcties (btw)', -r.creditnotaBtw],
-  ['Inkoop excl. btw', r.inkoopExclBtw],
-  ['Voorbelasting', r.voorbelasting],
+  ['4a - Inkoop diensten buiten EU (verlegd)', r.rubriek4a],
+  ['4b - Inkoop diensten binnen EU (verlegd)', r.rubriek4b],
+  ['Kosten excl. btw (totaal inkoop)', r.inkoopExclBtw],
+  ['5b - Voorbelasting (incl. verlegde btw)', r.voorbelasting],
   ['Netto BTW te betalen', r.nettoBtwTeBetalen],
 ];
 
@@ -63,17 +65,30 @@ export const exportBtwCsv = (r: BtwQuarterReport) => {
   push('');
 
   push('Kosten / Inkoopfacturen');
-  push('Leverancier', 'Factuurnr.', 'Datum', 'Categorie', 'Excl. btw', 'Voorbelasting', 'Incl. btw', 'Betaalstatus');
+  push(
+    'Leverancier',
+    'Factuurnr.',
+    'Datum',
+    'Categorie',
+    'BTW-code',
+    'Excl. btw',
+    'Voorbelasting',
+    'Incl. btw',
+    'Betaalstatus',
+    'Betaald via'
+  );
   for (const p of r.purchases) {
     push(
       p.supplierName,
       p.supplierInvoiceNumber,
       p.invoiceDate,
       p.category,
+      purchaseBtwCodeLabel[p.btwCode],
       nl(p.amountExclBtw),
       nl(p.btwAmount),
       nl(p.amountInclBtw),
-      p.paymentStatus
+      p.paymentStatus,
+      p.paidVia
     );
   }
 
@@ -145,7 +160,7 @@ export const exportBtwPdf = (r: BtwQuarterReport) => {
   if (r.purchases.length === 0) line('Geen inkoopfacturen', '');
   for (const p of r.purchases) {
     line(
-      `${p.supplierName} · ${p.supplierInvoiceNumber || '—'} · ${p.invoiceDate}`,
+      `${p.supplierName} · ${p.supplierInvoiceNumber || '—'} · ${p.invoiceDate} · ${purchaseBtwCodeLabel[p.btwCode]}`,
       `excl € ${nl(p.amountExclBtw)} · btw € ${nl(p.btwAmount)}`
     );
     if (y > 270) {
@@ -176,6 +191,8 @@ export const exportMonthlyCsv = (
   push(
     'Maand',
     'Omzet excl. btw',
+    'Omzet Dienst',
+    'Omzet Doorverkoop',
     'Kosten excl. btw',
     'BTW te betalen',
     'Ontvangen incl. btw',
@@ -185,13 +202,15 @@ export const exportMonthlyCsv = (
     push(
       row.label,
       nl(row.omzetExcl),
+      nl(row.omzetDienstExcl),
+      nl(row.omzetDoorverkoopExcl),
       nl(row.kostenExcl),
       nl(row.nettoBtw),
       nl(row.ontvangenIncl),
       nl(row.ontvangenExcl)
     );
     for (const p of row.projects) {
-      push(`   • ${projectName(p.projectId)}`, nl(p.omzetExcl), '', '', '', '');
+      push(`   • ${projectName(p.projectId)}`, nl(p.omzetExcl), '', '', '', '', '', '');
     }
   }
   push('');
@@ -201,6 +220,8 @@ export const exportMonthlyCsv = (
   push(
     'Jaartotaal',
     nl(total('omzetExcl')),
+    nl(total('omzetDienstExcl')),
+    nl(total('omzetDoorverkoopExcl')),
     nl(total('kostenExcl')),
     nl(total('nettoBtw')),
     nl(total('ontvangenIncl')),

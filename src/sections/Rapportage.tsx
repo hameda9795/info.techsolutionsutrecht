@@ -211,7 +211,7 @@ export default function Rapportage() {
             <tbody>
               {rows.map((r) => {
                 const empty = r.omzetExcl === 0 && r.kostenExcl === 0 && r.ontvangenIncl === 0;
-                const canExpand = r.projects.length > 0 && !isFiltered;
+                const canExpand = (r.projects.length > 0 || r.omzetDoorverkoopExcl !== 0) && !isFiltered;
                 const isOpen = openMonth === r.month;
                 return (
                   <MonthRows
@@ -266,6 +266,11 @@ export default function Rapportage() {
         <p>
           <strong className="text-gray-600">Ontvangen</strong> — geld dat die maand echt binnenkwam.
           Incl. = totaal, excl. = jouw deel (de btw daarin houd je apart voor de fiscus).
+        </p>
+        <p>
+          <strong className="text-gray-600">Doorverkoop</strong> — omzet uit regels die je hebt
+          doorverkocht (bv. domein/hosting). Puur informatief; dit maakt nooit automatisch een
+          inkoopfactuur of inkoop-btw aan.
         </p>
       </div>
     </div>
@@ -368,6 +373,23 @@ function MonthRows({
           {formatEUR(row.ontvangenExcl)}
         </td>
       </tr>
+      {isOpen && row.omzetDoorverkoopExcl !== 0 && (
+        <tr className="bg-amber-50/60 text-gray-600">
+          <td className="py-2 pl-12 pr-5">
+            <span className="flex items-center gap-2.5 border-l-2 border-amber-400 pl-3">
+              Waarvan Dienst / Doorverkoop
+            </span>
+          </td>
+          <td className="text-right py-2 px-5 tabular-nums">
+            <span title="Dienst">{formatEUR(row.omzetDienstExcl)}</span>
+            {' · '}
+            <span className="text-amber-700" title="Doorverkoop">
+              {formatEUR(row.omzetDoorverkoopExcl)}
+            </span>
+          </td>
+          <td colSpan={4} />
+        </tr>
+      )}
       {isOpen &&
         row.projects.map((p) => (
           <tr key={p.projectId} className="bg-brand-gray text-gray-600">

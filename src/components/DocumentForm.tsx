@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -9,20 +9,29 @@ import {
   DialogTitle,
   DialogFooter,
 } from '@/components/ui/dialog';
-import { Plus, Trash2 } from 'lucide-react';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import { Plus, Trash2, Link2, Unlink } from 'lucide-react';
 import type {
   Client,
   Document,
   DocumentItem,
   DocumentType,
   InvoiceSubtype,
+  LineType,
   Project,
+  PurchaseInvoice,
   SettledAdvance,
 } from '@/types';
-import { documentTypeLabel } from '@/types';
+import { documentTypeLabel, LINE_TYPES, lineTypeLabel } from '@/types';
 import { recalcItem, recalcDocument, applyAdvances, formatEUR } from '@/lib/calc';
 import { buildDraft, saveDraftEdits, createCreditNote } from '@/lib/documents';
-import { saveDocument, generateId } from '@/lib/db';
+import { saveDocument, generateId, getAllPurchaseInvoices } from '@/lib/db';
 import { toast } from 'sonner';
 
 interface Props {
@@ -38,6 +47,8 @@ interface Props {
   onSaved: () => void;
 }
 
+const NO_LINK = 'NONE';
+
 const blankItem = (grossEntry = false): DocumentItem => ({
   id: generateId(),
   description: '',
@@ -48,6 +59,7 @@ const blankItem = (grossEntry = false): DocumentItem => ({
   lineBtwAmount: 0,
   lineTotalInclBtw: 0,
   fixedInclBtw: grossEntry ? 0 : undefined,
+  lineType: 'DIENST',
 });
 
 const today = () => new Date().toISOString().split('T')[0];
@@ -68,9 +80,13 @@ export default function DocumentForm({
   const isAanbetaling = documentType === 'INVOICE' && invoiceSubtype === 'AANBETALING';
   const isCreditNote = documentType === 'CREDIT_NOTE';
 
+  // Oudere documenten (vóór deze versie) hebben nog geen lineType — val terug op Dienst.
+  const withLineType = (i: DocumentItem): DocumentItem => ({ ...i, lineType: i.lineType ?? 'DIENST' });
+
   const seedItems = (): DocumentItem[] => {
-    if (existing) return existing.items.map((i) => ({ ...i }));
-    if (isCreditNote && originalInvoice) return originalInvoice.items.map((i) => ({ ...i, id: generateId() }));
+    if (existing) return existing.items.map((i) => withLineType({ ...i }));
+    if (isCreditNote && originalInvoice)
+      return originalInvoice.items.map((i) => withLineType({ ...i, id: generateId() }));
     return [blankItem(isAanbetaling)];
   };
 
@@ -82,11 +98,16 @@ export default function DocumentForm({
   const [selectedAdvanceIds, setSelectedAdvanceIds] = useState<string[]>(
     existing?.settledAdvances?.map((a) => a.documentId) ?? []
   );
+  const [purchaseInvoices, setPurchaseInvoices] = useState<PurchaseInvoice[]>([]);
+
+  useEffect(() => {
+    getAllPurchaseInvoices().then(setPurchaseInvoices);
+  }, []);
 
   const updateItem = (
     id: string,
     field: keyof DocumentItem,
-    value: string | number
+    value: string | number | undefined
   ) => {
     setItems((prev) =>
       prev.map((it) => (it.id === id ? recalcItem({ ...it, [field]: value }) : it))
@@ -169,14 +190,14 @@ export default function DocumentForm({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="max-w-5xl max-h-[92vh] overflow-y-auto p-8">
         <DialogHeader>
-          <DialogTitle>{title}</DialogTitle>
+          <DialogTitle className="text-2xl">{title}</DialogTitle>
         </DialogHeader>
 
-        <form onSubmit={submit} className="space-y-5">
+        <form onSubmit={submit} className="space-y-7 text-base">
           {isCreditNote && originalInvoice && (
-            <div className="text-sm bg-purple-50 border border-purple-200 rounded-lg p-3">
+            <div className="text-base bg-purple-50 border border-purple-200 rounded-lg p-4">
               Creditnota voor factuur{' '}
               <strong>{originalInvoice.documentNumber}</strong>.{' '}
               {totals.totalInclBtw >= originalInvoice.totalInclBtw
@@ -185,113 +206,201 @@ export default function DocumentForm({
             </div>
           )}
 
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-2 gap-6">
             <div>
-              <Label>Datum</Label>
-              <Input type="date" value={issueDate} onChange={(e) => setIssueDate(e.target.value)} />
+              <Label className="text-sm mb-2">Datum</Label>
+              <Input
+                type="date"
+                value={issueDate}
+                onChange={(e) => setIssueDate(e.target.value)}
+                className="h-12 text-base"
+              />
             </div>
             <div>
-              <Label>{documentType === 'OFFERTE' || documentType === 'PROFORMA' ? 'Geldig tot' : 'Vervaldatum'}</Label>
-              <Input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
+              <Label className="text-sm mb-2">
+                {documentType === 'OFFERTE' || documentType === 'PROFORMA' ? 'Geldig tot' : 'Vervaldatum'}
+              </Label>
+              <Input
+                type="date"
+                value={dueDate}
+                onChange={(e) => setDueDate(e.target.value)}
+                className="h-12 text-base"
+              />
             </div>
           </div>
 
           {/* Items */}
-          <div className="space-y-2">
-            <Label className="font-semibold">Regels</Label>
-            {items.map((it) => (
-              <div key={it.id} className="grid grid-cols-12 gap-2 items-end bg-gray-50 p-3 rounded-lg">
-                <div className="col-span-5">
-                  <Label className="text-xs">Omschrijving</Label>
-                  <Input
-                    value={it.description}
-                    onChange={(e) => updateItem(it.id, 'description', e.target.value)}
-                  />
-                </div>
-                {isAanbetaling ? (
-                  <div className="col-span-4">
-                    <Label className="text-xs">Bedrag ontvangen (incl. btw)</Label>
-                    <Input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={it.fixedInclBtw ?? it.lineTotalInclBtw}
-                      onChange={(e) => updateItem(it.id, 'fixedInclBtw', Number(e.target.value))}
-                    />
+          <div className="space-y-4">
+            <Label className="text-base font-semibold">Regels</Label>
+            {items.map((it) => {
+              const linkedPurchase = it.linkedPurchaseInvoiceId
+                ? purchaseInvoices.find((p) => p.id === it.linkedPurchaseInvoiceId)
+                : undefined;
+              return (
+                <div key={it.id} className="space-y-4 bg-gray-50 p-5 rounded-xl border border-gray-100">
+                  {/* Row 1: omschrijving + verwijderen */}
+                  <div className="flex items-end gap-3">
+                    <div className="flex-1">
+                      <Label className="text-sm mb-2">Omschrijving</Label>
+                      <Input
+                        value={it.description}
+                        onChange={(e) => updateItem(it.id, 'description', e.target.value)}
+                        className="h-12 text-base"
+                      />
+                    </div>
+                    <Button
+                      type="button"
+                      variant="destructive"
+                      size="icon"
+                      className="!h-12 !w-12 shrink-0"
+                      onClick={() => removeItem(it.id)}
+                      disabled={items.length === 1}
+                    >
+                      <Trash2 className="w-5 h-5" />
+                    </Button>
                   </div>
-                ) : (
-                  <>
+
+                  {/* Row 2: aantal/prijs (of bedrag), btw%, regeltype */}
+                  <div className="grid grid-cols-12 gap-3 items-end">
+                    {isAanbetaling ? (
+                      <div className="col-span-7">
+                        <Label className="text-sm mb-2">Bedrag ontvangen (incl. btw)</Label>
+                        <Input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={it.fixedInclBtw ?? it.lineTotalInclBtw}
+                          onChange={(e) => updateItem(it.id, 'fixedInclBtw', Number(e.target.value))}
+                          className="h-12 text-base"
+                        />
+                      </div>
+                    ) : (
+                      <>
+                        <div className="col-span-2">
+                          <Label className="text-sm mb-2">Aantal</Label>
+                          <Input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            value={it.quantity}
+                            onChange={(e) => updateItem(it.id, 'quantity', Number(e.target.value))}
+                            className="h-12 text-base"
+                          />
+                        </div>
+                        <div className="col-span-3">
+                          <Label className="text-sm mb-2">Prijs excl.</Label>
+                          <Input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            value={it.unitPriceExclBtw}
+                            onChange={(e) => updateItem(it.id, 'unitPriceExclBtw', Number(e.target.value))}
+                            className="h-12 text-base"
+                          />
+                        </div>
+                      </>
+                    )}
                     <div className="col-span-2">
-                      <Label className="text-xs">Aantal</Label>
+                      <Label className="text-sm mb-2">BTW %</Label>
                       <Input
                         type="number"
                         min="0"
-                        step="0.01"
-                        value={it.quantity}
-                        onChange={(e) => updateItem(it.id, 'quantity', Number(e.target.value))}
+                        step="1"
+                        value={it.btwPercentage}
+                        onChange={(e) => updateItem(it.id, 'btwPercentage', Number(e.target.value))}
+                        className="h-12 text-base"
                       />
                     </div>
-                    <div className="col-span-2">
-                      <Label className="text-xs">Prijs excl.</Label>
-                      <Input
-                        type="number"
-                        min="0"
-                        step="0.01"
-                        value={it.unitPriceExclBtw}
-                        onChange={(e) => updateItem(it.id, 'unitPriceExclBtw', Number(e.target.value))}
-                      />
+                    <div className={isAanbetaling ? 'col-span-3' : 'col-span-5'}>
+                      <Label className="text-sm mb-2">Regeltype</Label>
+                      <Select
+                        value={it.lineType}
+                        onValueChange={(v) => updateItem(it.id, 'lineType', v as LineType)}
+                      >
+                        <SelectTrigger className="!h-12 text-base">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {LINE_TYPES.map((lt) => (
+                            <SelectItem key={lt} value={lt} className="text-base">
+                              {lineTypeLabel[lt]}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
                     </div>
-                  </>
-                )}
-                <div className="col-span-2">
-                  <Label className="text-xs">BTW %</Label>
-                  <Input
-                    type="number"
-                    min="0"
-                    step="1"
-                    value={it.btwPercentage}
-                    onChange={(e) => updateItem(it.id, 'btwPercentage', Number(e.target.value))}
-                  />
+                  </div>
+
+                  {it.lineType === 'DOORVERKOOP' && (
+                    <div className="flex flex-wrap items-center gap-3 text-sm bg-amber-50 border border-amber-200 rounded-lg px-4 py-3">
+                      <span className="text-amber-700">
+                        Doorverkoop — wordt mee aangegeven in omzet/btw, maakt nooit automatisch een
+                        inkoopfactuur. Heeft mogelijk een gekoppelde inkoopfactuur:
+                      </span>
+                      <Select
+                        value={it.linkedPurchaseInvoiceId ?? NO_LINK}
+                        onValueChange={(v) =>
+                          updateItem(it.id, 'linkedPurchaseInvoiceId', v === NO_LINK ? undefined : v)
+                        }
+                      >
+                        <SelectTrigger className="!h-10 text-sm w-64 ml-auto bg-white">
+                          {linkedPurchase ? (
+                            <span className="flex items-center gap-1.5">
+                              <Link2 className="w-3.5 h-3.5" /> {linkedPurchase.supplierName} ·{' '}
+                              {formatEUR(linkedPurchase.amountInclBtw)}
+                            </span>
+                          ) : (
+                            <span className="flex items-center gap-1.5 text-gray-400">
+                              <Unlink className="w-3.5 h-3.5" /> Koppel inkoopfactuur
+                            </span>
+                          )}
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value={NO_LINK}>Geen koppeling</SelectItem>
+                          {purchaseInvoices.map((p) => (
+                            <SelectItem key={p.id} value={p.id}>
+                              {p.supplierName} · {p.invoiceDate} · {formatEUR(p.amountInclBtw)}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  )}
+
+                  <div className="text-right text-sm text-gray-500">
+                    Regel: {formatEUR(it.lineTotalExclBtw)} excl · BTW {formatEUR(it.lineBtwAmount)} ·{' '}
+                    {formatEUR(it.lineTotalInclBtw)} incl
+                  </div>
                 </div>
-                <div className="col-span-1 flex justify-end">
-                  <Button
-                    type="button"
-                    variant="destructive"
-                    size="sm"
-                    onClick={() => removeItem(it.id)}
-                    disabled={items.length === 1}
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </Button>
-                </div>
-                <div className="col-span-12 text-right text-xs text-gray-500">
-                  Regel: {formatEUR(it.lineTotalExclBtw)} excl · BTW {formatEUR(it.lineBtwAmount)} ·{' '}
-                  {formatEUR(it.lineTotalInclBtw)} incl
-                </div>
-              </div>
-            ))}
-            <Button type="button" variant="outline" onClick={addItem} className="w-full">
-              <Plus className="w-4 h-4 mr-2" /> Regel toevoegen
+              );
+            })}
+            <Button
+              type="button"
+              variant="outline"
+              onClick={addItem}
+              className="w-full h-12 text-base"
+            >
+              <Plus className="w-5 h-5 mr-2" /> Regel toevoegen
             </Button>
           </div>
 
           {/* Advance selection for eindfactuur */}
           {isEindfactuur && (
-            <div className="space-y-2">
-              <Label className="font-semibold">Aanbetalingen verrekenen</Label>
+            <div className="space-y-3">
+              <Label className="text-base font-semibold">Aanbetalingen verrekenen</Label>
               {availableAdvances.length === 0 ? (
-                <p className="text-sm text-gray-400">
+                <p className="text-base text-gray-400">
                   Geen definitieve aanbetalingsfacturen in dit project.
                 </p>
               ) : (
                 availableAdvances.map((a) => (
                   <label
                     key={a.id}
-                    className="flex items-center gap-3 border rounded-lg p-3 cursor-pointer text-sm"
+                    className="flex items-center gap-3 border rounded-lg p-4 cursor-pointer text-base"
                   >
                     <input
                       type="checkbox"
-                      className="h-4 w-4 accent-brand-blue"
+                      className="h-5 w-5 accent-brand-blue"
                       checked={selectedAdvanceIds.includes(a.id)}
                       onChange={(e) =>
                         setSelectedAdvanceIds((prev) =>
@@ -310,24 +419,29 @@ export default function DocumentForm({
           {/* Creditnota reason */}
           {isCreditNote && (
             <div>
-              <Label>Reden *</Label>
-              <Input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Bijv. correctie factuur" />
+              <Label className="text-sm mb-2">Reden *</Label>
+              <Input
+                value={reason}
+                onChange={(e) => setReason(e.target.value)}
+                placeholder="Bijv. correctie factuur"
+                className="h-12 text-base"
+              />
             </div>
           )}
 
           {/* Notes */}
           <div>
-            <Label>Opmerkingen</Label>
+            <Label className="text-sm mb-2">Opmerkingen</Label>
             <textarea
-              className="w-full p-3 border rounded-lg text-sm focus:ring-2 focus:ring-brand-blue focus:border-transparent"
-              rows={3}
+              className="w-full p-4 border rounded-lg text-base focus:ring-2 focus:ring-brand-blue focus:border-transparent"
+              rows={4}
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
             />
           </div>
 
           {/* Totals */}
-          <div className="bg-gray-100 rounded-lg p-4 text-sm space-y-1">
+          <div className="bg-gray-100 rounded-xl p-6 text-base space-y-2">
             <div className="flex justify-between">
               <span>Subtotaal excl. btw</span>
               <span className="font-mono">{formatEUR(totals.subtotalExclBtw)}</span>
@@ -336,7 +450,7 @@ export default function DocumentForm({
               <span>BTW</span>
               <span className="font-mono">{formatEUR(totals.btwAmount)}</span>
             </div>
-            <div className="flex justify-between font-semibold border-t pt-1">
+            <div className="flex justify-between font-semibold text-lg border-t pt-2">
               <span>Totaal incl. btw</span>
               <span className="font-mono">{formatEUR(totals.totalInclBtw)}</span>
             </div>
@@ -354,11 +468,16 @@ export default function DocumentForm({
             )}
           </div>
 
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+          <DialogFooter className="pt-2">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => onOpenChange(false)}
+              className="h-12 px-6 text-base"
+            >
               Annuleren
             </Button>
-            <Button type="submit" className="bg-brand-blue hover:bg-blue-900">
+            <Button type="submit" className="h-12 px-6 text-base bg-brand-blue hover:bg-blue-900">
               Opslaan als concept
             </Button>
           </DialogFooter>

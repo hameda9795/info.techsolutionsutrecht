@@ -5,15 +5,21 @@ rules_version = '2';
 // Deploy: Firebase Console -> Firestore Database -> Rules -> paste -> Publish
 // (or `firebase deploy --only firestore:rules` if you use the Firebase CLI).
 //
-// Every collection in this app contains private business data (clients,
-// projects, invoices, payments, purchase invoices, VAT periods, counters).
-// Only a signed-in Firebase Authentication user may read or write anything.
+// FROZEN READ-ONLY as of the 2026-06-28 migration to the self-hosted Postgres
+// backend (see server/ and scripts/migrate-*.mts). This data is no longer the
+// live source of truth — it is kept exactly as-is, purely as a rollback safety
+// net, until the new system has been used through at least one full BTW
+// quarter. Nothing may write here anymore, so it can never drift out of sync
+// with what was migrated. Once that retention window has passed and the new
+// system is fully trusted, this project can be deleted.
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // Require an authenticated user for all access.
+    // Read-only for a signed-in user (so a backup/export can still be re-run
+    // if ever needed); no writes from anyone, including authenticated users.
     match /{document=**} {
-      allow read, write: if request.auth != null;
+      allow read: if request.auth != null;
+      allow write: if false;
     }
   }
 }

@@ -9,8 +9,7 @@ import {
   Settings,
   LogOut,
 } from 'lucide-react';
-import { signOut } from 'firebase/auth';
-import { auth } from '@/lib/firebase';
+import { logout as apiLogout } from '@/lib/auth';
 import { Toaster } from '@/components/ui/sonner';
 import { cn } from '@/lib/utils';
 
@@ -28,7 +27,7 @@ export default function AppLayout() {
   const navigate = useNavigate();
 
   const logout = async () => {
-    await signOut(auth);
+    await apiLogout();
     navigate('/login');
   };
 

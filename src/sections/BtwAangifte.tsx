@@ -10,14 +10,20 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
-import { Plus, Download, FileDown, Pencil, Trash2, Receipt } from 'lucide-react';
+import { Plus, Download, FileDown, Pencil, Trash2, Receipt, Paperclip } from 'lucide-react';
 import type {
   Document,
   PurchaseInvoice,
   BtwPeriodMeta,
   BtwPeriodState,
 } from '@/types';
-import { BTW_PERIOD_STATES, btwPeriodStateLabel, btwPeriodStateClass } from '@/types';
+import {
+  BTW_PERIOD_STATES,
+  btwPeriodStateLabel,
+  btwPeriodStateClass,
+  purchaseBtwCodeLabel,
+  paidViaLabel,
+} from '@/types';
 import {
   getAllDocuments,
   getAllPurchaseInvoices,
@@ -33,6 +39,7 @@ import {
   type BtwQuarterReport,
 } from '@/lib/btw';
 import { exportBtwCsv, exportBtwPdf } from '@/lib/btwExport';
+import { deletePurchaseAttachment } from '@/lib/storage';
 import PurchaseInvoiceForm from '@/components/PurchaseInvoiceForm';
 import { toast } from 'sonner';
 
@@ -90,6 +97,9 @@ export default function BtwAangifte() {
 
   const removePurchase = async (p: PurchaseInvoice) => {
     if (!confirm(`Inkoopfactuur van ${p.supplierName} verwijderen?`)) return;
+    // Bijlage eerst opruimen — die lookup gebeurt op id, dus moet vóór het
+    // verwijderen van de rij zelf gebeuren, anders is er niets meer om op te zoeken.
+    if (p.attachmentPath) await deletePurchaseAttachment(p.id);
     await deletePurchaseInvoice(p.id);
     toast.success('Inkoopfactuur verwijderd');
     load();
@@ -192,11 +202,13 @@ function QuarterPanel({
   onDeletePurchase: (p: PurchaseInvoice) => void;
 }) {
   const summary: { label: string; value: number; strong?: boolean }[] = [
-    { label: 'Verkoop excl. btw', value: report.verkoopExclBtw },
-    { label: 'BTW verkoop', value: report.btwVerkoop },
+    { label: '1a — Verkoop excl. btw (binnenland, 21%)', value: report.verkoopExclBtw },
+    { label: '1a — BTW verkoop', value: report.btwVerkoop },
     { label: "Creditnota correcties (btw)", value: -report.creditnotaBtw },
-    { label: 'Inkoop excl. btw', value: report.inkoopExclBtw },
-    { label: 'Voorbelasting', value: report.voorbelasting },
+    { label: '4a — Inkoop diensten buiten EU (verlegd)', value: report.rubriek4a },
+    { label: '4b — Inkoop diensten binnen EU (verlegd)', value: report.rubriek4b },
+    { label: 'Kosten excl. btw (totaal inkoop)', value: report.inkoopExclBtw },
+    { label: '5b — Voorbelasting (incl. verlegde btw)', value: report.voorbelasting },
     { label: 'Netto BTW te betalen', value: report.nettoBtwTeBetalen, strong: true },
   ];
 
@@ -265,7 +277,9 @@ function QuarterPanel({
             ))}
           </div>
           <p className="text-xs text-gray-400 mt-3">
-            Netto BTW te betalen = BTW verkoop − BTW creditnota's − voorbelasting.
+            Netto BTW te betalen = BTW verkoop + verlegde btw (rubriek 4a/4b) − BTW creditnota's −
+            voorbelasting (rubriek 5b). De verlegde btw zit ook in de voorbelasting, dus het
+            netto-effect van reverse charge (EU/Buiten-EU verlegd) is altijd 0.
           </p>
         </CardContent>
       </Card>
@@ -356,8 +370,9 @@ function QuarterPanel({
                 <th className="py-2">Leverancier</th>
                 <th>Datum</th>
                 <th>Categorie</th>
-                <th className="text-right">Excl. btw</th>
-                <th className="text-right">Voorbelasting</th>
+                <th>BTW-code</th>
+                <th className="text-right">Kosten</th>
+                <th className="text-right">Btw (5b)</th>
                 <th>Status</th>
                 <th></th>
               </tr>
@@ -366,13 +381,30 @@ function QuarterPanel({
               {report.purchases.map((p) => (
                 <tr key={p.id} className="border-t">
                   <td className="py-2 font-medium">
-                    {p.supplierName}
+                    <span className="inline-flex items-center gap-1.5">
+                      {p.supplierName}
+                      {p.attachmentPdf && (
+                        <a
+                          href={p.attachmentPdf}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          title={p.attachmentName ?? 'Bijlage'}
+                          className="text-gray-400 hover:text-brand-blue"
+                        >
+                          <Paperclip className="w-3.5 h-3.5" />
+                        </a>
+                      )}
+                    </span>
                     {p.supplierInvoiceNumber && (
                       <span className="text-xs text-gray-400 block">{p.supplierInvoiceNumber}</span>
                     )}
                   </td>
                   <td>{p.invoiceDate}</td>
                   <td className="text-gray-500">{p.category}</td>
+                  <td className="text-gray-500">
+                    {purchaseBtwCodeLabel[p.btwCode]}
+                    <span className="text-xs text-gray-400 block">{paidViaLabel[p.paidVia]}</span>
+                  </td>
                   <td className="text-right font-mono">{formatEUR(p.amountExclBtw)}</td>
                   <td className="text-right font-mono font-semibold">{formatEUR(p.btwAmount)}</td>
                   <td>
