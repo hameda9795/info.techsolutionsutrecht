@@ -8,6 +8,11 @@ import { requireAuth } from '../auth.js';
 const ATTACHMENTS_ROOT = process.env.ATTACHMENTS_DIR ?? '/data/attachments';
 const MAX_SIZE = 10 * 1024 * 1024; // 10 MB
 const ALLOWED_EXT = new Set(['.pdf', '.jpg', '.jpeg', '.png', '.webp']);
+// The frontend (Vercel) and this API are on different domains, so a relative
+// "/api/attachments/..." stored as the attachment URL resolves against whatever
+// page it's rendered on (the frontend's own origin) instead of this API —
+// it must always be an absolute URL pointing back at this API.
+const PUBLIC_API_URL = (process.env.PUBLIC_API_URL ?? 'https://api.techsolutionsutrecht.nl').replace(/\/$/, '');
 
 // Strip anything that isn't a safe filename character — no path separators, no
 // control characters — before ever using a client-supplied name in a path.
@@ -70,7 +75,7 @@ export default async function attachmentsRoutes(app: FastifyInstance) {
     return {
       path: relPath,
       name: data.filename,
-      url: `/api/attachments/${purchaseInvoiceId}`,
+      url: `${PUBLIC_API_URL}/api/attachments/${purchaseInvoiceId}`,
     };
   });
 

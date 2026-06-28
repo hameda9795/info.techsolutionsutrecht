@@ -101,7 +101,9 @@ export default function DocumentForm({
   const [purchaseInvoices, setPurchaseInvoices] = useState<PurchaseInvoice[]>([]);
 
   useEffect(() => {
-    getAllPurchaseInvoices().then(setPurchaseInvoices);
+    getAllPurchaseInvoices()
+      .then(setPurchaseInvoices)
+      .catch((err) => console.error('Kon inkoopfacturen niet laden voor koppeling:', err));
   }, []);
 
   const updateItem = (
@@ -355,7 +357,7 @@ export default function DocumentForm({
                             </span>
                           )}
                         </SelectTrigger>
-                        <SelectContent>
+                        <SelectContent position="popper" sideOffset={4}>
                           <SelectItem value={NO_LINK}>Geen koppeling</SelectItem>
                           {purchaseInvoices.map((p) => (
                             <SelectItem key={p.id} value={p.id}>
