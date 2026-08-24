@@ -15,6 +15,13 @@ const A4: React.CSSProperties = {
   padding: '38px 50px 80px 50px',
 };
 
+// Keep the existing 2x raster resolution so text and thin lines stay sharp,
+// but store the PNG in the PDF with jsPDF's lossless predictor/Flate pipeline.
+// Without this, each page is effectively embedded as a large uncompressed RGB
+// bitmap, which can make a normal one- or two-page invoice exceed 20 MB.
+const PDF_RENDER_SCALE = 2;
+const PDF_IMAGE_COMPRESSION = 'SLOW';
+
 const Header = () => (
   <div className="flex justify-between items-start mb-4 pb-4 border-b-[3px] border-brand-orange">
     <img src="/logo.png" alt="Logo" className="w-40 h-auto object-contain" />
@@ -61,7 +68,12 @@ export default function DocumentViewer() {
   const addPage = async (pdf: jsPDF, el: HTMLDivElement, first: boolean) => {
     const pageW = pdf.internal.pageSize.getWidth();
     const pageH = pdf.internal.pageSize.getHeight();
-    const canvas = await html2canvas(el, { scale: 2, useCORS: true, backgroundColor: '#ffffff' });
+    const canvas = await html2canvas(el, {
+      scale: PDF_RENDER_SCALE,
+      useCORS: true,
+      backgroundColor: '#ffffff',
+      logging: false,
+    });
     const img = canvas.toDataURL('image/png');
     // Fit the whole page within one A4 (scale by the smaller ratio so nothing is clipped).
     const ratio = Math.min(pageW / canvas.width, pageH / canvas.height);
@@ -69,12 +81,17 @@ export default function DocumentViewer() {
     const h = canvas.height * ratio;
     const x = (pageW - w) / 2;
     if (!first) pdf.addPage();
-    pdf.addImage(img, 'PNG', x, 0, w, h);
+    pdf.addImage(img, 'PNG', x, 0, w, h, undefined, PDF_IMAGE_COMPRESSION);
   };
 
   const generatePDF = async () => {
     if (!page1Ref.current || !docu) return;
-    const pdf = new jsPDF('p', 'mm', 'a4');
+    const pdf = new jsPDF({
+      orientation: 'p',
+      unit: 'mm',
+      format: 'a4',
+      compress: true,
+    });
     await addPage(pdf, page1Ref.current, true);
     if (docu.notes && page2Ref.current) {
       await addPage(pdf, page2Ref.current, false);
