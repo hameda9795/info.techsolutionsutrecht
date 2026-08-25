@@ -15,7 +15,9 @@ import {
   Receipt,
   PiggyBank,
   Landmark,
+  Loader2,
 } from 'lucide-react';
+import { toast } from 'sonner';
 import type { Document, Payment, PurchaseInvoice, Project } from '@/types';
 import {
   getAllDocuments,
@@ -25,7 +27,7 @@ import {
 } from '@/lib/db';
 import { formatEUR, round2 } from '@/lib/calc';
 import { computeMonthlyReport, btwYears, type MonthlyReportRow } from '@/lib/btw';
-import { exportMonthlyCsv } from '@/lib/btwExport';
+import { exportMonthlyPdf } from '@/lib/monthlyReportPdf';
 
 const ALL = 'ALL';
 
@@ -37,6 +39,7 @@ export default function Rapportage() {
   const [year, setYear] = useState<number>(new Date().getFullYear());
   const [projectId, setProjectId] = useState<string>(ALL);
   const [openMonth, setOpenMonth] = useState<number | null>(null);
+  const [exportingPdf, setExportingPdf] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -77,6 +80,23 @@ export default function Rapportage() {
 
   const now = new Date();
   const currentMonth = now.getFullYear() === year ? now.getMonth() + 1 : -1;
+
+  const downloadPdf = async () => {
+    setExportingPdf(true);
+    try {
+      await exportMonthlyPdf(
+        rows,
+        year,
+        projectName,
+        isFiltered ? projectName(projectId) : undefined
+      );
+    } catch (error) {
+      console.error('Rapportage PDF export failed', error);
+      toast.error('De PDF kon niet worden gemaakt. Probeer het opnieuw.');
+    } finally {
+      setExportingPdf(false);
+    }
+  };
 
   return (
     <div className="space-y-6">
@@ -133,11 +153,15 @@ export default function Rapportage() {
           <Button
             variant="outline"
             className="bg-white"
-            onClick={() =>
-              exportMonthlyCsv(rows, year, projectName, isFiltered ? projectName(projectId) : undefined)
-            }
+            disabled={exportingPdf}
+            onClick={downloadPdf}
           >
-            <FileDown className="w-4 h-4 mr-2" /> CSV
+            {exportingPdf ? (
+              <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+            ) : (
+              <FileDown className="w-4 h-4 mr-2" />
+            )}
+            PDF
           </Button>
         </div>
       </div>
